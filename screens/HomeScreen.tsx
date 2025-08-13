@@ -11,6 +11,10 @@ const ThemeContext = createContext({
 
 const EXAMPLES = [
   {
+    title: 'Krpano Paris Tour',
+    url: 'https://krpano.com/tours/paris/',
+  },,
+  {
     title: 'Krpano Apartment Tour (3D)',
     url: 'https://krpano.com/releases/1.23/viewer/krpano.html?xml=examples/demotour-apartment/tour.xml',
   },
@@ -33,10 +37,6 @@ const EXAMPLES = [
   {
     title: 'Krpano Gravina Apartment',
     url: 'https://krpano.com/releases/1.23/viewer/krpano.html?xml=examples/depthmap/gravina-apartment-tour/main.xml',
-  },,
-  {
-    title: 'Krpano Paris Tour',
-    url: 'https://krpano.com/tours/paris/',
   },
 ];
 
@@ -62,11 +62,7 @@ const HomeScreen = () => {
           <Text style={{ marginTop: 20, fontSize: 18, color: theme.colors.primary }}>
             {now.toLocaleString()}
           </Text>
-          <View style={styles.themeRow}>
-            <Text style={{ marginRight: 8 }}>Dark mode</Text>
-            <Switch value={isDark} onValueChange={toggleTheme} />
-          </View>
-          <View style={{ marginTop: 32 }}>
+          <View style={{ marginTop: 12 }}>
             {EXAMPLES.map((item, idx) => (
               <Button
                 key={item.title}

@@ -2,7 +2,7 @@ import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import Icon from 'react-native-vector-icons/Ionicons';
+import { Text } from 'react-native';
 import HomeScreen from '../../screens/HomeScreen';
 import SearchScreen from '../../screens/SearchScreen';
 import EditScreen from '../../screens/EditScreen';
@@ -28,7 +28,7 @@ function TabNavigator() {
         component={HomeScreen} 
         options={{
           tabBarIcon: ({ color, size }) => (
-            <Icon name="home-outline" size={size} color={color} />
+            <Text style={{ fontSize: size, color: color }}>🏠</Text>
           ),
         }}
       />
@@ -37,7 +37,7 @@ function TabNavigator() {
         component={SearchScreen} 
         options={{
           tabBarIcon: ({ color, size }) => (
-            <Icon name="search-outline" size={size} color={color} />
+            <Text style={{ fontSize: size, color: color }}>🔍</Text>
           ),
         }}
       />
@@ -46,7 +46,7 @@ function TabNavigator() {
         component={EditScreen} 
         options={{
           tabBarIcon: ({ color, size }) => (
-            <Icon name="create-outline" size={size} color={color} />
+            <Text style={{ fontSize: size, color: color }}>✏️</Text>
           ),
         }}
       />
@@ -55,7 +55,7 @@ function TabNavigator() {
         component={LoveScreen} 
         options={{
           tabBarIcon: ({ color, size }) => (
-            <Icon name="heart-outline" size={size} color={color} />
+            <Text style={{ fontSize: size, color: color }}>❤️</Text>
           ),
         }}
       />
@@ -64,7 +64,7 @@ function TabNavigator() {
         component={SettingScreen} 
         options={{
           tabBarIcon: ({ color, size }) => (
-            <Icon name="settings-outline" size={size} color={color} />
+            <Text style={{ fontSize: size, color: color }}>⚙️</Text>
           ),
         }}
       />
