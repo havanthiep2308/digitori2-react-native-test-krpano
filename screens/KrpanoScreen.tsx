@@ -375,42 +375,39 @@ const KrpanoScreen: React.FC = () => {
           shapes.forEach(shape => {
             const isSelected = shape.id === selectedId;
             
-            // Sử dụng tọa độ 3D đã lưu nếu có
             let screenPoints = shape.points; // fallback
             
             if (shape.spherePoints && typeof krpano !== 'undefined') {
               try {
-                // Chuyển đổi tọa độ 3D sang 2D hiện tại với độ chính xác cao
-                const cvs = resolveViewerCanvas();
-                if (cvs) {
-                  const rect = cvs.getBoundingClientRect();
-                  const scaleX = cvs.width / rect.width;
-                  const scaleY = cvs.height / rect.height;
+                // Chuyển đổi tọa độ 3D sang 2D hiện tại
+                const view = krpano.get('view');
+                if (view) {
+                  const hlookat = parseFloat(view.hlookat) || 0;
+                  const vlookat = parseFloat(view.vlookat) || 0;
+                  const fov = parseFloat(view.fov) || 90;
+                  
+                  const screenWidth = window.innerWidth;
+                  const screenHeight = window.innerHeight;
+                  const centerX = screenWidth / 2;
+                  const centerY = screenHeight / 2;
                   
                   screenPoints = shape.spherePoints.map(spherePoint => {
-                    if (typeof krpano.spheretoscreen === 'function') {
-                      try {
-                        const screen = krpano.spheretoscreen(spherePoint.ath, spherePoint.atv);
-                        if (screen && isFinite(screen.x) && isFinite(screen.y)) {
-                          // Chuyển từ stage coords sang CSS pixel
-                          const cssX = (screen.x / scaleX) + rect.left;
-                          const cssY = (screen.y / scaleY) + rect.top;
-                          return { x: cssX, y: cssY };
-                        }
-                      } catch(e) {
-                        log('spheretoscreen error for point: ' + e.message);
-                      }
-                    }
-                    // Fallback: sử dụng tọa độ gốc
-                    return shape.points[0];
+                    // Tính toán offset tương đối từ center
+                    const athOffset = spherePoint.ath - hlookat;
+                    const atvOffset = spherePoint.atv - vlookat;
+                    
+                    // Chuyển đổi sang tọa độ màn hình
+                    const screenX = centerX + (athOffset / (fov * 0.5)) * centerX;
+                    const screenY = centerY + (atvOffset / (fov * 0.5)) * centerY;
+                    
+                    return { x: screenX, y: screenY };
                   });
                   
-                  // Kiểm tra xem có điểm hợp lệ không
                   const validPoints = screenPoints.filter(p => p && isFinite(p.x) && isFinite(p.y));
                   if (validPoints.length >= 3) {
                     screenPoints = validPoints;
                   } else {
-                    screenPoints = shape.points; // fallback về tọa độ gốc
+                    screenPoints = shape.points; // fallback to original screen points
                   }
                 }
               } catch(e) {
@@ -418,8 +415,7 @@ const KrpanoScreen: React.FC = () => {
                 screenPoints = shape.points; // fallback
               }
             }
-
-            // Vẽ polygon với perspective 3D
+            
             drawPolygon3D(ctx, screenPoints, shape.color, isSelected);
           });
         }
@@ -559,138 +555,68 @@ const KrpanoScreen: React.FC = () => {
         function sphereFromScreen(x, y){
           log('sphereFromScreen: trying x=' + x + ', y=' + y);
           
-          // x,y hiện tại là toạ độ theo overlay-canvas. Quy đổi sang clientX/Y trước.
-          const overlayRect = window.rnDraw.canvas.getBoundingClientRect();
-          const clientX = x + overlayRect.left;
-          const clientY = y + overlayRect.top;
-
-          // Chuyển sang toạ độ theo viewer (CSS pixel bên trong viewer)
-          const v = toViewerXY(clientX, clientY);
-
-          // PHƯƠNG PHÁP 1: Sử dụng screentosphere trực tiếp với tọa độ stage chính xác
           try {
-            if (typeof krpano.screentosphere === 'function') {
-              // Lấy canvas thực của Krpano
-              const cvs = resolveViewerCanvas();
-              if (cvs) {
-                // Tính tỷ lệ chính xác giữa CSS pixel và stage pixel
-                const rect = cvs.getBoundingClientRect();
-                const scaleX = cvs.width / rect.width;
-                const scaleY = cvs.height / rect.height;
-                
-                // Chuyển từ CSS pixel sang stage pixel
-                let stageX = (clientX - rect.left) * scaleX;
-                let stageY = (clientY - rect.top) * scaleY;
-                
-                // Clamp vào vùng canvas hợp lệ
-                stageX = Math.max(0, Math.min(stageX, cvs.width - 1));
-                stageY = Math.max(0, Math.min(stageY, cvs.height - 1));
-                
-                log('sphereFromScreen: stage coords x=' + stageX + ', y=' + stageY + ' (canvas: ' + cvs.width + 'x' + cvs.height + ')');
-                
-                const sp = krpano.screentosphere(stageX, stageY);
-                log('sphereFromScreen: screentosphere result ath=' + sp?.ath + ', atv=' + sp?.atv);
-                
-                if (sp && isFinite(sp.ath) && isFinite(sp.atv)) {
-                  return sp;
-                }
-              }
-            }
-          } catch(e) {
-            log('sphereFromScreen: screentosphere ERROR ' + e.message);
-          }
-          
-          // PHƯƠNG PHÁP 2: Ray casting với tọa độ tương đối chính xác
-          try {
+            // Lấy thông tin view hiện tại
             const view = krpano.get('view');
-            log('sphereFromScreen: using ray casting calculation, view=' + JSON.stringify(view));
-            
-            // Lấy canvas rect của Krpano
-            const cvs = resolveViewerCanvas();
-            if (!cvs) {
-              log('sphereFromScreen: cannot resolve viewer canvas for ray casting');
+            if (!view) {
+              log('sphereFromScreen: cannot get view info');
               return null;
             }
             
-            const rect = cvs.getBoundingClientRect();
+            log('sphereFromScreen: current view - hlookat=' + view.hlookat + ', vlookat=' + view.vlookat + ', fov=' + view.fov);
             
-            // Tính toán tọa độ tương đối trong canvas (-1 đến +1)
-            const nx = ((clientX - rect.left) / rect.width) * 2 - 1; // -1 (left) .. +1 (right)
-            const ny = -((clientY - rect.top) / rect.height) * 2 + 1; // +1 (top) .. -1 (bottom)
+            // Lấy kích thước màn hình thực tế
+            const screenWidth = window.innerWidth;
+            const screenHeight = window.innerHeight;
             
-            // Lấy thông tin góc nhìn hiện tại
+            // Tính toán tọa độ tương đối từ center (-1 đến +1)
+            const centerX = screenWidth / 2;
+            const centerY = screenHeight / 2;
+            
+            // Chuyển đổi tọa độ overlay sang tọa độ màn hình
+            const overlayRect = window.rnDraw.canvas.getBoundingClientRect();
+            const screenX = x + overlayRect.left;
+            const screenY = y + overlayRect.top;
+            
+            // Tính offset tương đối từ center
+            const offsetX = (screenX - centerX) / centerX; // -1 đến +1
+            const offsetY = (screenY - centerY) / centerY; // -1 đến +1
+            
+            log('sphereFromScreen: screen coords - x=' + screenX + ', y=' + screenY + ', center=' + centerX + ',' + centerY);
+            log('sphereFromScreen: relative offsets - x=' + offsetX + ', y=' + offsetY);
+            
+            // Lấy góc nhìn hiện tại
             const hlookat = parseFloat(view.hlookat) || 0;
             const vlookat = parseFloat(view.vlookat) || 0;
             const fov = parseFloat(view.fov) || 90;
-            const fovType = view.fovtype || 'MFOV';
             
-            // Tính toán ath/atv dựa trên FOV và ray casting
-            let ath, atv;
+            // Tính toán ath/atv dựa trên FOV và offset
+            // Sử dụng FOV để tính toán góc tương đối
+            const fovRad = (fov * Math.PI) / 180;
             
-            if (fovType === 'MFOV' || fovType === 'HFOV') {
-              // FOV theo chiều ngang - sử dụng ray casting chính xác
-              ath = hlookat + (nx * fov * 0.5);
-              
-              // Tính atv dựa trên ray casting với perspective projection
-              const fovRad = (fov * Math.PI) / 180;
-              const hlookatRad = (hlookat * Math.PI) / 180;
-              const vlookatRad = (vlookat * Math.PI) / 180;
-              
-              // Ray direction vector
-              const rayX = Math.sin((ath * Math.PI) / 180);
-              const rayY = Math.cos((ath * Math.PI) / 180);
-              const rayZ = Math.tan((ny * fov * 0.5 * Math.PI) / 180);
-              
-              // Tính atv từ ray direction
-              atv = Math.atan2(rayZ, Math.sqrt(rayX * rayX + rayY * rayY)) * 180 / Math.PI;
-              atv = vlookat + atv;
-              
-            } else {
-              // FOV theo chiều dọc hoặc diagonal
-              ath = hlookat + (nx * fov * 0.5);
-              atv = vlookat + (ny * fov * 0.5);
-            }
+            // ath: horizontal angle (longitude)
+            // Sử dụng FOV theo chiều ngang
+            const ath = hlookat + (offsetX * fov * 0.5);
+            
+            // atv: vertical angle (latitude)
+            // Sử dụng FOV theo chiều dọc, nhưng cần tính toán chính xác hơn
+            const atv = vlookat + (offsetY * fov * 0.5);
             
             // Normalize ath về khoảng -180 đến +180
-            ath = ((ath + 180) % 360) - 180;
+            const normalizedAth = ((ath + 180) % 360) - 180;
             
             // Clamp atv về khoảng hợp lệ (-90 đến +90)
-            atv = Math.max(-90, Math.min(90, atv));
+            const clampedAtv = Math.max(-90, Math.min(90, atv));
             
-            log('sphereFromScreen: ray casting result ath=' + ath + ', atv=' + atv);
-            return { ath, atv };
+            log('sphereFromScreen: calculated - ath=' + ath + ', atv=' + atv);
+            log('sphereFromScreen: normalized - ath=' + normalizedAth + ', atv=' + clampedAtv);
             
-          } catch(e) {
-            log('sphereFromScreen: ray casting ERROR ' + e.message);
-          }
-          
-          // PHƯƠNG PHÁP 3: Fallback với tọa độ tương đối đơn giản
-          try {
-            log('sphereFromScreen: using simple fallback calculation');
-            
-            // Sử dụng tọa độ tương đối từ góc nhìn hiện tại
-            const view = krpano.get('view');
-            const hlookat = parseFloat(view.hlookat) || 0;
-            const vlookat = parseFloat(view.vlookat) || 0;
-            
-            // Tính offset tương đối từ center
-            const centerX = window.innerWidth / 2;
-            const centerY = window.innerHeight / 2;
-            const offsetX = (clientX - centerX) / centerX; // -1 đến +1
-            const offsetY = (clientY - centerY) / centerY; // -1 đến +1
-            
-            // Chuyển đổi sang ath/atv với offset nhỏ
-            const ath = hlookat + (offsetX * 30); // offset tối đa 30 độ
-            const atv = vlookat + (offsetY * 30); // offset tối đa 30 độ
-            
-            log('sphereFromScreen: fallback result ath=' + ath + ', atv=' + atv);
-            return { ath, atv };
+            return { ath: normalizedAth, atv: clampedAtv };
             
           } catch(e) {
-            log('sphereFromScreen: all methods failed: ' + e.message);
+            log('sphereFromScreen: ERROR ' + e.message);
+            return null;
           }
-          
-          return null;
         }
         
         function createKrpanoPolygon(id, pts){
@@ -700,12 +626,8 @@ const KrpanoScreen: React.FC = () => {
           waitForKrpano(()=>{
             const name = id;
             
-            // 1. Tạo hotspot theo cách chuẩn của Krpano
-            log('1. Creating hotspot: ' + name);
+            // Tạo hotspot polygon
             safeCall('addhotspot(' + name + ');');
-            
-            // 2. Cấu hình hotspot theo Krpano API
-            log('2. Configuring hotspot');
             safeCall('set(hotspot[' + name + '].type, polygon);');
             safeCall('set(hotspot[' + name + '].renderer, webgl);');
             safeCall('set(hotspot[' + name + '].fillcolor, 0x00FF00);');
@@ -718,97 +640,28 @@ const KrpanoScreen: React.FC = () => {
             safeCall('set(hotspot[' + name + '].visible, true);');
             safeCall('set(hotspot[' + name + '].enabled, false);');
             safeCall('set(hotspot[' + name + '].capture, false);');
-            
-            // 3. Thêm points theo cách chuẩn của Krpano
-            log('3. Adding points to hotspot - starting with ' + pts.length + ' points');
             safeCall('hotspot[' + name + '].clearpoints();');
             
             const spherePoints = [];
-            const debugInfo = [];
             
+            // Chuyển đổi từng điểm sang tọa độ sphere
             pts.forEach((p, idx) => {
               log('Processing point ' + idx + ': screen(' + p.x + ',' + p.y + ')');
               
-              // Lưu thông tin debug
-              const debugPoint = {
-                index: idx,
-                screen: { x: p.x, y: p.y },
-                client: null,
-                viewer: null,
-                stage: null,
-                sphere: null
-              };
-              
-              // Chuyển đổi tọa độ từng bước để debug
-              const overlayRect = window.rnDraw.canvas.getBoundingClientRect();
-              const clientX = p.x + overlayRect.left;
-              const clientY = p.y + overlayRect.top;
-              debugPoint.client = { x: clientX, y: clientY };
-              
-              const v = toViewerXY(clientX, clientY);
-              debugPoint.viewer = { x: v.x, y: v.y };
-              
-              // Lấy canvas và tính stage coordinates
-              const cvs = resolveViewerCanvas();
-              if (cvs) {
-                const rect = cvs.getBoundingClientRect();
-                const scaleX = cvs.width / rect.width;
-                const scaleY = cvs.height / rect.height;
-                
-                let stageX = (clientX - rect.left) * scaleX;
-                let stageY = (clientY - rect.top) * scaleY;
-                
-                stageX = Math.max(0, Math.min(stageX, cvs.width - 1));
-                stageY = Math.max(0, Math.min(stageY, cvs.height - 1));
-                
-                debugPoint.stage = { x: stageX, y: stageY, scaleX, scaleY };
-              }
-              
-              // Chuyển đổi sang sphere coordinates
               const sp = sphereFromScreen(p.x, p.y);
               if (sp && isFinite(sp.ath) && isFinite(sp.atv)) {
-                debugPoint.sphere = { ath: sp.ath, atv: sp.atv };
-                
-                log('Point ' + idx + ': final coordinates -> sphere(' + sp.ath + ',' + sp.atv + ')');
-                const addCmd = 'hotspot[' + name + '].addpoint(' + sp.ath + ',' + sp.atv + ');';
-                log('Point ' + idx + ': calling ' + addCmd);
-                safeCall(addCmd);
+                log('Point ' + idx + ': sphere(' + sp.ath + ',' + sp.atv + ')');
+                safeCall('hotspot[' + name + '].addpoint(' + sp.ath + ',' + sp.atv + ');');
                 spherePoints.push({ ath: sp.ath, atv: sp.atv });
               } else {
                 log('Point ' + idx + ': ERROR - invalid coordinates');
               }
-              
-              debugInfo.push(debugPoint);
             });
             
-            // Lưu lại toạ độ cầu và thông tin debug
+            // Lưu lại tọa độ sphere cho shape
             const shape = window.rnDraw.shapes.find(s => s.id === id);
             if (shape) { 
               shape.spherePoints = spherePoints;
-              shape.debugInfo = debugInfo;
-              log('Saved debug info for shape: ' + JSON.stringify(debugInfo, null, 2));
-            }
-
-            // 4. Kiểm tra và log kết quả
-            try {
-              const pc = krpano.get('hotspot[' + name + '].pointcount');
-              log('hotspot[' + name + '] pointcount=' + pc);
-              
-              // Thử lấy thông tin hotspot
-              const hotspot = krpano.get('hotspot[' + name + ']');
-              log('hotspot[' + name + '] info: type=' + hotspot.type + ', visible=' + hotspot.visible + ', enabled=' + hotspot.enabled);
-              
-              // Test: liệt kê tất cả hotspots
-              const allHotspots = krpano.get('hotspot');
-              log('Total hotspots: ' + (allHotspots ? allHotspots.length : 0));
-              if (allHotspots) {
-                for (let i = 0; i < allHotspots.length; i++) {
-                  const h = allHotspots[i];
-                  log('hotspot[' + i + ']: name=' + h.name + ', type=' + h.type + ', visible=' + h.visible);
-                }
-              }
-            } catch(e) { 
-              log('read hotspot info error: ' + e.message); 
             }
             
             log('=== CREATE POLYGON END ===');
@@ -825,15 +678,28 @@ const KrpanoScreen: React.FC = () => {
         window.debugShapeCoordinates = function(shapeId){
           if (!window.rnDraw || !window.rnDraw.shapes) return;
           const shape = window.rnDraw.shapes.find(s => s.id === shapeId);
-          if (shape && shape.debugInfo) {
+          if (shape && shape.spherePoints) {
             console.log('=== DEBUG SHAPE COORDINATES ===');
             console.log('Shape ID:', shapeId);
-            console.log('Debug Info:', JSON.stringify(shape.debugInfo, null, 2));
-            console.log('Sphere Points:', shape.spherePoints);
             console.log('Screen Points:', shape.points);
+            console.log('Sphere Points:', shape.spherePoints);
+            
+            // Hiển thị thông tin view hiện tại
+            if (typeof krpano !== 'undefined') {
+              try {
+                const view = krpano.get('view');
+                console.log('Current View:', {
+                  hlookat: view.hlookat,
+                  vlookat: view.vlookat,
+                  fov: view.fov
+                });
+              } catch(e) {
+                console.log('Cannot get view info:', e.message);
+              }
+            }
             console.log('=== END DEBUG ===');
           } else {
-            console.log('Shape not found or no debug info available');
+            console.log('Shape not found or no sphere points available');
           }
         };
         
@@ -849,29 +715,32 @@ const KrpanoScreen: React.FC = () => {
             safeCall('set(hotspot[' + name + '].bordercolor, 0xFF0000);');
             safeCall('set(hotspot[' + name + '].borderalpha, 1.0);');
             safeCall('set(hotspot[' + name + '].borderwidth, 2.0);');
-            safeCall('set(hotspot[' + name + '].fill, true);');
             safeCall('set(hotspot[' + name + '].visible, true);');
             safeCall('set(hotspot[' + name + '].enabled, false);');
+            safeCall('set(hotspot[' + name + '].capture, false);');
             safeCall('hotspot[' + name + '].clearpoints();');
             
-            // Tạo polygon hình vuông đơn giản ở center
+            // Lấy góc nhìn hiện tại
             const view = krpano.get('view');
             const hlookat = parseFloat(view.hlookat) || 0;
             const vlookat = parseFloat(view.vlookat) || 0;
+            const fov = parseFloat(view.fov) || 90;
             
-            // Tạo 4 điểm tạo thành hình vuông nhỏ
-            const size = 10; // độ
-            safeCall('hotspot[' + name + '].addpoint(' + (hlookat - size) + ',' + (vlookat - size) + ');');
-            safeCall('hotspot[' + name + '].addpoint(' + (hlookat + size) + ',' + (vlookat - size) + ');');
-            safeCall('hotspot[' + name + '].addpoint(' + (hlookat + size) + ',' + (vlookat + size) + ');');
-            safeCall('hotspot[' + name + '].addpoint(' + (hlookat - size) + ',' + (vlookat + size) + ');');
+            // Tạo một hình vuông nhỏ ở center
+            const offset = 5; // offset 5 độ
             
-            log('Created test polygon: ' + name + ' at center (h=' + hlookat + ', v=' + vlookat + ')');
+            // Thêm 4 điểm để tạo hình vuông
+            safeCall('hotspot[' + name + '].addpoint(' + (hlookat - offset) + ',' + (vlookat - offset) + ');');
+            safeCall('hotspot[' + name + '].addpoint(' + (hlookat + offset) + ',' + (vlookat - offset) + ');');
+            safeCall('hotspot[' + name + '].addpoint(' + (hlookat + offset) + ',' + (vlookat + offset) + ');');
+            safeCall('hotspot[' + name + '].addpoint(' + (hlookat - offset) + ',' + (vlookat + offset) + ');');
+            
+            log('Created test polygon at center: hlookat=' + hlookat + ', vlookat=' + vlookat + ', offset=' + offset);
             log('=== CREATE TEST POLYGON END ===');
           });
         };
         
-        // helper debug: tạo polygon với tọa độ được tính toán lại từ shape hiện có
+        // helper debug: tạo lại polygon từ shape đã có
         window.recreatePolygonFromShape = function(shapeId){
           if (!window.rnDraw || !window.rnDraw.shapes) return;
           const shape = window.rnDraw.shapes.find(s => s.id === shapeId);
@@ -881,47 +750,27 @@ const KrpanoScreen: React.FC = () => {
           }
           
           log('=== RECREATE POLYGON FROM SHAPE START ===');
-          log('Recreating polygon: ' + shapeId);
+          log('Shape ID:', shapeId);
+          log('Screen Points:', shape.points.length);
+          log('Sphere Points:', shape.spherePoints ? shape.spherePoints.length : 0);
           
           waitForKrpano(()=>{
-            // Xóa hotspot cũ
-            safeCall('removehotspot(' + shapeId + ');');
+            // Xóa hotspot cũ nếu có
+            try {
+              safeCall('removehotspot(' + shapeId + ');');
+            } catch(e) {
+              log('Cannot remove old hotspot: ' + e.message);
+            }
             
-            // Tạo hotspot mới
-            const name = shapeId;
-            safeCall('addhotspot(' + name + ');');
-            safeCall('set(hotspot[' + name + '].type, polygon);');
-            safeCall('set(hotspot[' + name + '].fillcolor, 0x00FF00);');
-            safeCall('set(hotspot[' + name + '].fillalpha, 0.5);');
-            safeCall('set(hotspot[' + name + '].bordercolor, 0x00FF00);');
-            safeCall('set(hotspot[' + name + '].borderalpha, 1.0);');
-            safeCall('set(hotspot[' + name + '].borderwidth, 2.0);');
-            safeCall('set(hotspot[' + name + '].fill, true);');
-            safeCall('set(hotspot[' + name + '].zorder, 1000);');
-            safeCall('set(hotspot[' + name + '].visible, true);');
-            safeCall('set(hotspot[' + name + '].enabled, false);');
-            safeCall('set(hotspot[' + name + '].capture, false);');
-            safeCall('hotspot[' + name + '].clearpoints();');
-            
-            // Sử dụng tọa độ sphere đã lưu nếu có
-            if (shape.spherePoints && shape.spherePoints.length > 0) {
-              log('Using saved sphere coordinates: ' + shape.spherePoints.length + ' points');
-              shape.spherePoints.forEach((sp, idx) => {
-                safeCall('hotspot[' + name + '].addpoint(' + sp.ath + ',' + sp.atv + ');');
-                log('Added point ' + idx + ': ath=' + sp.ath + ', atv=' + sp.atv);
-              });
+            // Tạo lại polygon
+            if (shape.spherePoints && shape.spherePoints.length >= 3) {
+              // Sử dụng tọa độ sphere đã có
+              log('Recreating from sphere points');
+              createKrpanoPolygon(shapeId, shape.points);
             } else {
-              // Tính toán lại từ tọa độ screen
-              log('Recalculating from screen coordinates: ' + shape.points.length + ' points');
-              shape.points.forEach((p, idx) => {
-                const sp = sphereFromScreen(p.x, p.y);
-                if (sp && isFinite(sp.ath) && isFinite(sp.atv)) {
-                  safeCall('hotspot[' + name + '].addpoint(' + sp.ath + ',' + sp.atv + ');');
-                  log('Recalculated point ' + idx + ': ath=' + sp.ath + ', atv=' + sp.atv);
-                } else {
-                  log('Failed to recalculate point ' + idx);
-                }
-              });
+              // Tính toán lại từ screen points
+              log('Recalculating from screen points');
+              createKrpanoPolygon(shapeId, shape.points);
             }
             
             log('=== RECREATE POLYGON FROM SHAPE END ===');
@@ -972,10 +821,9 @@ const KrpanoScreen: React.FC = () => {
             pts.forEach((p, idx) => {
               log('Update point ' + idx + ': screen(' + p.x + ',' + p.y + ')');
               
-              // Sử dụng cùng logic chuyển đổi tọa độ như createKrpanoPolygon
               const sp = sphereFromScreen(p.x, p.y);
               if (sp && isFinite(sp.ath) && isFinite(sp.atv)) {
-                log('Update point ' + idx + ': final coordinates -> sphere(' + sp.ath + ',' + sp.atv + ')');
+                log('Update point ' + idx + ': sphere(' + sp.ath + ',' + sp.atv + ')');
                 safeCall('hotspot[' + name + '].addpoint(' + sp.ath + ',' + sp.atv + ');');
                 spherePoints.push({ ath: sp.ath, atv: sp.atv });
               } else {
@@ -985,7 +833,6 @@ const KrpanoScreen: React.FC = () => {
             
             const shape = window.rnDraw.shapes.find(s => s.id === id);
             if (shape) { shape.spherePoints = spherePoints; }
-
             log('=== UPDATE POLYGON END ===');
           });
         }

@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Polygon Drawing Test - Simple Logic</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f0f0f0;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .button-group {
+            margin: 20px 0;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        button {
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            background: #007bff;
+            color: white;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+        .log-area {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 15px;
+            height: 400px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        .status.success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .status.error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .status.info { background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
+        .coordinate-info {
+            background: #e9ecef;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 15px 0;
+        }
+        .coordinate-info h4 {
+            margin-top: 0;
+            color: #495057;
+        }
+        .coordinate-info pre {
+            background: white;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Polygon Drawing Test - Simple Logic</h1>
+        <p>This test page helps debug the simplified polygon drawing logic in the React Native app.</p>
+        
+        <div class="status info">
+            <strong>Instructions:</strong> Use the buttons below to test the polygon drawing functions. Check the console for detailed logs.
+        </div>
+        
+        <div class="button-group">
+            <button onclick="checkSystemStatus()">Check System Status</button>
+            <button onclick="testHotspot()">Test Hotspot Creation</button>
+            <button onclick="testPolygon()">Test Polygon Creation</button>
+            <button onclick="createTestPolygon()">Create Test Polygon</button>
+            <button onclick="debugShapeCoordinates()">Debug Shape Coordinates</button>
+            <button onclick="recreatePolygon()">Recreate Polygon</button>
+            <button onclick="clearLog()">Clear Log</button>
+            <button onclick="exportLog()">Export Log</button>
+        </div>
+        
+        <div class="coordinate-info">
+            <h4>Coordinate Conversion Logic (Simplified)</h4>
+            <p>The new logic uses a simpler approach:</p>
+            <ol>
+                <li><strong>Screen to Sphere:</strong> Calculate relative offset from screen center (-1 to +1), then apply FOV-based conversion</li>
+                <li><strong>Sphere to Screen:</strong> Calculate offset from current view center, then apply inverse FOV conversion</li>
+                <li><strong>No complex ray casting or stage coordinate calculations</strong></li>
+            </ol>
+        </div>
+        
+        <div class="log-area" id="logArea">
+            Ready to test polygon drawing functions...
+        </div>
+        
+        <div class="status info">
+            <strong>Note:</strong> This test page should be used within the React Native WebView where the drawing functions are injected.
+        </div>
+    </div>
+
+    <script>
+        let logMessages = [];
+        
+        function log(message) {
+            const timestamp = new Date().toLocaleTimeString();
+            const logMessage = `[${timestamp}] ${message}`;
+            logMessages.push(logMessage);
+            
+            const logArea = document.getElementById('logArea');
+            logArea.textContent = logMessages.join('\n');
+            logArea.scrollTop = logArea.scrollHeight;
+            
+            console.log(logMessage);
+        }
+        
+        function checkSystemStatus() {
+            log('=== CHECKING SYSTEM STATUS ===');
+            
+            // Check if we're in the right environment
+            if (typeof window !== 'undefined') {
+                log('✓ Window object available');
+            } else {
+                log('✗ Window object not available');
+                return;
+            }
+            
+            // Check for React Native WebView
+            if (window.ReactNativeWebView) {
+                log('✓ React Native WebView detected');
+            } else {
+                log('✗ React Native WebView not detected');
+            }
+            
+            // Check for Krpano
+            if (typeof window.krpano !== 'undefined') {
+                log('✓ Krpano detected');
+                try {
+                    const view = window.krpano.get('view');
+                    log('✓ Krpano view accessible: ' + JSON.stringify(view));
+                } catch(e) {
+                    log('✗ Cannot access Krpano view: ' + e.message);
+                }
+            } else {
+                log('✗ Krpano not detected');
+            }
+            
+            // Check for drawing functions
+            if (window.rnDraw) {
+                log('✓ Drawing system (rnDraw) available');
+                log('  - Shapes: ' + (window.rnDraw.shapes ? window.rnDraw.shapes.length : 0));
+                log('  - Mode: ' + (window.rnDraw.mode || 'unknown'));
+            } else {
+                log('✗ Drawing system (rnDraw) not available');
+            }
+            
+            // Check for debug functions
+            const debugFunctions = ['debugShapeCoordinates', 'createTestPolygon', 'recreatePolygonFromShape'];
+            debugFunctions.forEach(funcName => {
+                if (typeof window[funcName] === 'function') {
+                    log('✓ ' + funcName + ' function available');
+                } else {
+                    log('✗ ' + funcName + ' function not available');
+                }
+            });
+            
+            log('=== SYSTEM STATUS CHECK COMPLETE ===');
+        }
+        
+        function testHotspot() {
+            log('=== TESTING HOTSPOT CREATION ===');
+            
+            if (typeof window.krpano === 'undefined') {
+                log('✗ Krpano not available');
+                return;
+            }
+            
+            try {
+                const testName = 'test_hotspot_' + Date.now();
+                log('Creating test hotspot: ' + testName);
+                
+                window.krpano.call('addhotspot(' + testName + ');');
+                window.krpano.call('set(hotspot[' + testName + '].type, polygon);');
+                window.krpano.call('set(hotspot[' + testName + '].fillcolor, 0xFF0000);');
+                window.krpano.call('set(hotspot[' + testName + '].fillalpha, 0.5);');
+                window.krpano.call('set(hotspot[' + testName + '].bordercolor, 0xFF0000);');
+                window.krpano.call('set(hotspot[' + testName + '].borderalpha, 1.0);');
+                window.krpano.call('set(hotspot[' + testName + '].borderwidth, 2.0);');
+                window.krpano.call('set(hotspot[' + testName + '].fill, true);');
+                window.krpano.call('set(hotspot[' + testName + '].zorder, 1000);');
+                window.krpano.call('set(hotspot[' + testName + '].visible, true);');
+                window.krpano.call('set(hotspot[' + testName + '].enabled, false);');
+                window.krpano.call('set(hotspot[' + testName + '].capture, false);');
+                
+                // Add a simple square
+                const view = window.krpano.get('view');
+                const hlookat = parseFloat(view.hlookat) || 0;
+                const vlookat = parseFloat(view.vlookat) || 0;
+                const offset = 5;
+                
+                window.krpano.call('hotspot[' + testName + '].addpoint(' + (hlookat - offset) + ',' + (vlookat - offset) + ');');
+                window.krpano.call('hotspot[' + testName + '].addpoint(' + (hlookat + offset) + ',' + (vlookat - offset) + ');');
+                window.krpano.call('hotspot[' + testName + '].addpoint(' + (hlookat + offset) + ',' + (vlookat + offset) + ');');
+                window.krpano.call('hotspot[' + testName + '].addpoint(' + (hlookat - offset) + ',' + (vlookat + offset) + ');');
+                
+                log('✓ Test hotspot created successfully');
+                log('  - Name: ' + testName);
+                log('  - Center: hlookat=' + hlookat + ', vlookat=' + vlookat);
+                log('  - Size: ' + (offset * 2) + ' degrees');
+                
+            } catch(e) {
+                log('✗ Error creating test hotspot: ' + e.message);
+            }
+            
+            log('=== HOTSPOT TEST COMPLETE ===');
+        }
+        
+        function testPolygon() {
+            log('=== TESTING POLYGON CREATION ===');
+            
+            if (typeof window.createKrpanoPolygon !== 'function') {
+                log('✗ createKrpanoPolygon function not available');
+                return;
+            }
+            
+            try {
+                const testId = 'test_poly_' + Date.now();
+                const testPoints = [
+                    { x: 100, y: 100 },
+                    { x: 200, y: 100 },
+                    { x: 200, y: 200 },
+                    { x: 100, y: 200 }
+                ];
+                
+                log('Creating test polygon: ' + testId);
+                log('Test points: ' + JSON.stringify(testPoints));
+                
+                window.createKrpanoPolygon(testId, testPoints);
+                
+                log('✓ Test polygon creation initiated');
+                
+            } catch(e) {
+                log('✗ Error creating test polygon: ' + e.message);
+            }
+            
+            log('=== POLYGON TEST COMPLETE ===');
+        }
+        
+        function createTestPolygon() {
+            log('=== CREATING TEST POLYGON ===');
+            
+            if (typeof window.createTestPolygon !== 'function') {
+                log('✗ createTestPolygon function not available');
+                return;
+            }
+            
+            try {
+                window.createTestPolygon();
+                log('✓ Test polygon creation initiated');
+            } catch(e) {
+                log('✗ Error creating test polygon: ' + e.message);
+            }
+            
+            log('=== TEST POLYGON CREATION COMPLETE ===');
+        }
+        
+        function debugShapeCoordinates() {
+            log('=== DEBUGGING SHAPE COORDINATES ===');
+            
+            if (typeof window.debugShapeCoordinates !== 'function') {
+                log('✗ debugShapeCoordinates function not available');
+                return;
+            }
+            
+            if (!window.rnDraw || !window.rnDraw.shapes) {
+                log('✗ No shapes available to debug');
+                return;
+            }
+            
+            const shapes = window.rnDraw.shapes;
+            log('Found ' + shapes.length + ' shapes to debug');
+            
+            shapes.forEach((shape, index) => {
+                log('--- Shape ' + (index + 1) + ' ---');
+                log('ID: ' + shape.id);
+                log('Screen Points: ' + shape.points.length);
+                log('Sphere Points: ' + (shape.spherePoints ? shape.spherePoints.length : 0));
+                
+                if (shape.spherePoints) {
+                    shape.spherePoints.forEach((point, pIndex) => {
+                        log('  Point ' + pIndex + ': ath=' + point.ath + ', atv=' + point.atv);
+                    });
+                }
+                
+                // Call the debug function
+                try {
+                    window.debugShapeCoordinates(shape.id);
+                    log('✓ Debug function called for shape: ' + shape.id);
+                } catch(e) {
+                    log('✗ Error calling debug function: ' + e.message);
+                }
+            });
+            
+            log('=== SHAPE COORDINATES DEBUG COMPLETE ===');
+        }
+        
+        function recreatePolygon() {
+            log('=== RECREATING POLYGON ===');
+            
+            if (typeof window.recreatePolygonFromShape !== 'function') {
+                log('✗ recreatePolygonFromShape function not available');
+                return;
+            }
+            
+            if (!window.rnDraw || !window.rnDraw.shapes || window.rnDraw.shapes.length === 0) {
+                log('✗ No shapes available to recreate');
+                return;
+            }
+            
+            const firstShape = window.rnDraw.shapes[0];
+            log('Recreating first available shape: ' + firstShape.id);
+            
+            try {
+                window.recreatePolygonFromShape(firstShape.id);
+                log('✓ Polygon recreation initiated');
+            } catch(e) {
+                log('✗ Error recreating polygon: ' + e.message);
+            }
+            
+            log('=== POLYGON RECREATION COMPLETE ===');
+        }
+        
+        function clearLog() {
+            logMessages = [];
+            document.getElementById('logArea').textContent = 'Log cleared...';
+        }
+        
+        function exportLog() {
+            const logText = logMessages.join('\n');
+            const blob = new Blob([logText], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'polygon-debug-log.txt';
+            a.click();
+            URL.revokeObjectURL(url);
+            log('Log exported to file');
+        }
+        
+        // Auto-check system status on page load
+        window.addEventListener('load', () => {
+            setTimeout(checkSystemStatus, 1000);
+        });
+    </script>
+</body>
+</html>
