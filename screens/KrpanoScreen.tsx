@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react';
 import { View, StyleSheet, TouchableOpacity, Alert, Text } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { useNavigation, useRoute } from '@react-navigation/native';
+import { injectDrawingScript, toggleDrawingMode as toggleDrawingModeUtil, toggleFreehandMode, toggleEditMode as toggleEditModeUtil, toggleMoveMode as toggleMoveModeUtil, undoLastPoint as undoLastPointUtil, clearDrawing as clearDrawingUtil } from '../src/utils/krpanoDrawingUtils';
 
 const KrpanoScreen: React.FC = () => {
   const navigation = useNavigation();
@@ -11,6 +12,8 @@ const KrpanoScreen: React.FC = () => {
   const webViewRef = useRef<WebView>(null);
   const [isDrawingMode, setIsDrawingMode] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
+  const [isFreehandMode, setIsFreehandMode] = useState(false);
+  const [isMoveMode, setIsMoveMode] = useState(false);
   const [drawingPoints, setDrawingPoints] = useState<Array<{x: number, y: number}>>([]);
   const [showInstructions, setShowInstructions] = useState(false);
 
@@ -18,863 +21,127 @@ const KrpanoScreen: React.FC = () => {
     navigation.goBack();
   };
 
-  const toggleDrawingMode = () => {
+  const handleToggleDrawingMode = () => {
     if (isEditMode) {
       // tắt edit trước khi vẽ
-      toggleEditMode(false);
+      handleToggleEditMode(false);
     }
-    setIsDrawingMode(!isDrawingMode);
-    if (!isDrawingMode) {
+    if (isFreehandMode) {
+      // tắt freehand trước khi vẽ polygon
+      setIsFreehandMode(false);
+    }
+    
+    const newDrawingMode = !isDrawingMode;
+    setIsDrawingMode(newDrawingMode);
+    
+    if (newDrawingMode) {
       // Bắt đầu chế độ vẽ
       setDrawingPoints([]);
       setShowInstructions(true);
-      injectDrawingScript();
+      
+      // Đảm bảo script được inject trước khi kích hoạt chế độ vẽ
+      injectDrawingScript(webViewRef);
+      
+      // Đợi một chút để script được inject hoàn tất
+      setTimeout(() => {
+        toggleDrawingModeUtil(webViewRef);
+        console.log('Drawing mode activated');
+        // Đảm bảo sự kiện click được truyền đúng cách từ WebView đến overlay
+          if (webViewRef.current) {
+            webViewRef.current.injectJavaScript(`
+              document.addEventListener('click', function(e) {
+                if (window.ReactNativeWebView) {
+                  window.ReactNativeWebView.postMessage(JSON.stringify({type: 'click', x: e.clientX, y: e.clientY}));
+                }
+              }, true);
+            `);
+          }
+      }, 500);
       
       setTimeout(() => {
         setShowInstructions(false);
       }, 5000);
     } else {
-      // Thoát chế độ vẽ / chỉnh sửa: chỉ tắt tương tác, KHÔNG xoá hình
-      const script = `if (window.exitShapeEdit) { window.exitShapeEdit(); }`;
-      webViewRef.current?.injectJavaScript(script);
+      // Thoát chế độ vẽ: chỉ tắt tương tác, KHÔNG xoá hình
+      toggleEditModeUtil(webViewRef, false);
       setShowInstructions(false);
     }
   };
 
-  const toggleEditMode = (forceValue?: boolean) => {
+  const handleToggleFreehandMode = () => {
+    if (isEditMode) {
+      // tắt edit trước khi vẽ
+      handleToggleEditMode(false);
+    }
+    if (isDrawingMode) {
+      // tắt polygon trước khi vẽ tự do
+      setIsDrawingMode(false);
+    }
+    
+    const newFreehandMode = !isFreehandMode;
+    setIsFreehandMode(newFreehandMode);
+    
+    if (newFreehandMode) {
+      // Bắt đầu chế độ vẽ tự do
+      setDrawingPoints([]);
+      setShowInstructions(true);
+      
+      // Đảm bảo script được inject trước khi kích hoạt chế độ vẽ tự do
+      injectDrawingScript(webViewRef);
+      
+      // Đợi một chút để script được inject hoàn tất
+      setTimeout(() => {
+        toggleFreehandMode(webViewRef);
+        console.log('Freehand mode activated');
+      }, 500);
+      
+      setTimeout(() => {
+        setShowInstructions(false);
+      }, 5000);
+    } else {
+      // Thoát chế độ vẽ tự do: chỉ tắt tương tác, KHÔNG xoá hình
+      toggleEditModeUtil(webViewRef, false);
+      setShowInstructions(false);
+    }
+  };
+
+  const handleToggleEditMode = (forceValue?: boolean) => {
     const next = forceValue !== undefined ? forceValue : !isEditMode;
     setIsEditMode(next);
-    const script = next
-      ? `if (window.enableShapeEdit) { window.enableShapeEdit(); }`
-      : `if (window.exitShapeEdit) { window.exitShapeEdit(); }`;
-    webViewRef.current?.injectJavaScript(script);
+    if (next) {
+      if (isDrawingMode) setIsDrawingMode(false);
+      if (isFreehandMode) setIsFreehandMode(false);
+      if (isMoveMode) setIsMoveMode(false);
+    }
+    toggleEditModeUtil(webViewRef, next);
   };
 
-  const undoLastPoint = () => {
-    const script = `
-      if (window.undoLastPoint) {
-        window.undoLastPoint();
-      }
-    `;
-    webViewRef.current?.injectJavaScript(script);
+  const handleToggleMoveMode = (forceValue?: boolean) => {
+    const next = forceValue !== undefined ? forceValue : !isMoveMode;
+    setIsMoveMode(next);
+    if (next) {
+      if (isDrawingMode) setIsDrawingMode(false);
+      if (isFreehandMode) setIsFreehandMode(false);
+      if (isEditMode) setIsEditMode(false);
+    }
+    toggleMoveModeUtil(webViewRef, next);
   };
 
-  const injectDrawingScript = () => {
-    const script = `
-      (function() {
-        const RN = window.ReactNativeWebView;
-        function log(msg){ try{ RN && RN.postMessage('[draw] ' + msg); }catch(e){} }
-        log('inject start');
-
-        // State tổng
-        window.rnDraw = {
-          overlay: null,
-          canvas: null,
-          ctx: null,
-          points: [], // điểm đang vẽ (preview)
-          active: true,
-          completed: false,
-          shapes: [], // các hình đã tạo { id, color, points: [{x,y}] }
-          selectedId: null,
-          dragging: false,
-          dragLast: { x: 0, y: 0 },
-          mode: 'draw', // 'draw' | 'edit' | 'idle'
-          viewerEl: null,
-          viewerCanvas: null,
-          viewerRect: { left: 0, top: 0, width: 0, height: 0 },
-          stageScaleX: 1,
-          stageScaleY: 1,
-          onViewChange: null
-        };
-
-        // Helpers hiển/ẩn overlay
-        function updatePointerEvents(){
-          if(!window.rnDraw || !window.rnDraw.overlay || !window.rnDraw.canvas) return;
-          const interact = (window.rnDraw.mode==='edit' || window.rnDraw.mode==='draw');
-          const pe = interact ? 'auto' : 'none';
-          window.rnDraw.overlay.style.pointerEvents = pe;
-          window.rnDraw.canvas.style.pointerEvents = pe;
-        }
-        function showOverlay(){ if(window.rnDraw && window.rnDraw.overlay){ window.rnDraw.overlay.style.display='block'; updatePointerEvents(); } }
-        function hideOverlay(){ if(window.rnDraw && window.rnDraw.overlay){ window.rnDraw.overlay.style.display='none'; } }
-        
-        // Tạo overlay và canvas
-        createOverlay();
-        bindEvents();
-        resizeCanvas();
-        redraw();
-
-        function createOverlay(){
-          const old = document.getElementById('rn-draw-overlay');
-          if (old && old.parentNode) old.parentNode.removeChild(old);
-
-          const overlay = document.createElement('div');
-          overlay.id = 'rn-draw-overlay';
-          overlay.style.position = 'fixed';
-          overlay.style.inset = '0';
-          overlay.style.width = '100vw';
-          overlay.style.height = '100vh';
-          overlay.style.zIndex = '2147483647';
-          // Cho phép overlay nhận sự kiện khi vẽ/chỉnh sửa
-          overlay.style.pointerEvents = 'auto';
-          overlay.style.background = 'transparent';
-
-          const canvas = document.createElement('canvas');
-          canvas.id = 'rn-draw-canvas';
-          canvas.style.position = 'absolute';
-          canvas.style.top = '0';
-          canvas.style.left = '0';
-          canvas.style.width = '100%';
-          canvas.style.height = '100%';
-          canvas.style.pointerEvents = 'auto';
-          overlay.appendChild(canvas);
-
-          document.body.appendChild(overlay);
-
-          window.rnDraw.overlay = overlay;
-          window.rnDraw.canvas = canvas;
-          window.rnDraw.ctx = canvas.getContext('2d');
-
-          // dấu test
-          window.rnDraw.ctx.fillStyle = 'rgba(255,0,0,0.5)';
-          window.rnDraw.ctx.fillRect(10,10,20,20);
-
-          showOverlay();
-        }
-        
-        function resizeCanvas(){
-          const { canvas, ctx } = window.rnDraw;
-          const ratio = window.devicePixelRatio || 1;
-          canvas.width = Math.floor(window.innerWidth * ratio);
-          canvas.height = Math.floor(window.innerHeight * ratio);
-          ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-          updateViewerRect();
-        }
-
-        function bindEvents(){
-          const { canvas } = window.rnDraw;
-
-          const onPointerDown = (clientX, clientY) => {
-            const { mode } = window.rnDraw;
-            const { x, y } = toCanvasXY(clientX, clientY);
-            log('onPointerDown: mode=' + mode + ', x=' + x + ', y=' + y);
-
-            if (mode === 'draw'){
-              if (window.rnDraw.points.length > 2){
-                const f = window.rnDraw.points[0];
-                if (Math.hypot(x-f.x, y-f.y) < 30){ 
-                  log('onPointerDown: completing polygon');
-                  completePolygon(); 
-                  return true; 
-                }
-              }
-              log('onPointerDown: adding point');
-              addPreviewPoint(x,y);
-              return true;
-            }
-
-            if (mode === 'edit'){
-              const hitId = hitTestShapes(x, y);
-              if (hitId){
-                window.rnDraw.selectedId = hitId;
-                window.rnDraw.dragging = true;
-                window.rnDraw.dragLast = { x, y };
-                redraw();
-                return true;
-              }
-              return false; // không trúng shape -> cho phép quay pano
-            }
-            return false; // idle
-          };
-
-          const onPointerMove = (clientX, clientY) => {
-            if (!window.rnDraw.dragging) return false;
-            const { x, y } = toCanvasXY(clientX, clientY);
-            const dx = x - window.rnDraw.dragLast.x;
-            const dy = y - window.rnDraw.dragLast.y;
-            window.rnDraw.dragLast = { x, y };
-
-            const shape = getSelectedShape();
-            if (!shape) return false;
-            for (let i=0;i<shape.points.length;i++){
-              shape.points[i].x += dx;
-              shape.points[i].y += dy;
-            }
-            updateKrpanoPolygon(shape.id, shape.points);
-            redraw();
-            return true;
-          };
-
-          const onPointerUp = () => {
-            const wasDragging = window.rnDraw.dragging;
-            window.rnDraw.dragging = false;
-            return wasDragging;
-          };
-
-          // Chỉ bắt sự kiện khi cần thiết
-          canvas.addEventListener('pointerdown', e => { 
-            const handled = onPointerDown(e.clientX, e.clientY);
-            if (handled) e.preventDefault();
-          }, { passive:false });
-          
-          canvas.addEventListener('pointermove', e => { 
-            const handled = onPointerMove(e.clientX, e.clientY);
-            if (handled) e.preventDefault();
-          }, { passive:false });
-          
-          canvas.addEventListener('pointerup', e => { 
-            const handled = onPointerUp();
-            if (handled) e.preventDefault();
-          }, { passive:false });
-          
-          canvas.addEventListener('touchstart', e => { 
-            const t = e.changedTouches[0];
-            if (t) {
-              const handled = onPointerDown(t.clientX, t.clientY);
-              if (handled) e.preventDefault();
-            }
-          }, { passive:false });
-          
-          canvas.addEventListener('touchmove', e => { 
-            const t = e.changedTouches[0];
-            if (t) {
-              const handled = onPointerMove(t.clientX, t.clientY);
-              if (handled) e.preventDefault();
-            }
-          }, { passive:false });
-          
-          canvas.addEventListener('touchend', e => { 
-            const handled = onPointerUp();
-            if (handled) e.preventDefault();
-          }, { passive:false });
-
-          window.addEventListener('resize', resizeCanvas);
-
-          window.clearDrawing = clearAll;
-          window.undoLastPoint = undoLastPoint;
-          window.completePolygon = completePolygon;
-          window.enableShapeEdit = function(){ 
-            window.rnDraw.mode='edit'; 
-            updatePointerEvents();
-          };
-          window.exitShapeEdit = function(){ 
-            window.rnDraw.mode='idle'; 
-            window.rnDraw.dragging=false; 
-            window.rnDraw.selectedId=null; 
-            updatePointerEvents();
-            redraw(); 
-          };
-        }
-
-        // removed krpano direct stage capture handlers to revert to overlay-driven input
-
-        function resolveViewerElement(){
-          if (window.rnDraw.viewerEl && document.body.contains(window.rnDraw.viewerEl)) return window.rnDraw.viewerEl;
-          const selectors = ['#krpanoSWFObject', '#krpano', '#pano', '.krpano', 'object', 'embed'];
-          for (const sel of selectors){
-            const el = document.querySelector(sel);
-            if (el){ window.rnDraw.viewerEl = el; return el; }
-          }
-          return null;
-        }
-
-        function resolveViewerCanvas(){
-          if (window.rnDraw.viewerCanvas && document.body.contains(window.rnDraw.viewerCanvas)) return window.rnDraw.viewerCanvas;
-          // Ưu tiên canvas bên trong viewerEl
-          const root = resolveViewerElement();
-          if (root){
-            const c1 = root.querySelector && root.querySelector('canvas');
-            if (c1){ window.rnDraw.viewerCanvas = c1; return c1; }
-          }
-          // Fallback: canvas toàn trang (krpano thường có 1 canvas lớn)
-          const c2 = document.querySelector('canvas');
-          if (c2){ window.rnDraw.viewerCanvas = c2; return c2; }
-          return null;
-        }
-
-        function updateViewerRect(){
-          const cvs = resolveViewerCanvas();
-          if (!cvs) return;
-          const r = cvs.getBoundingClientRect();
-          window.rnDraw.viewerRect = { left: r.left, top: r.top, width: r.width, height: r.height };
-          // Tỷ lệ stage pixel so với CSS pixel
-          const sx = (cvs.width && r.width) ? (cvs.width / r.width) : 1;
-          const sy = (cvs.height && r.height) ? (cvs.height / r.height) : 1;
-          window.rnDraw.stageScaleX = sx;
-          window.rnDraw.stageScaleY = sy;
-        }
-
-        function toCanvasXY(clientX, clientY){
-          const rect = window.rnDraw.canvas.getBoundingClientRect();
-          return { x: clientX - rect.left, y: clientY - rect.top };
-        }
-
-        function toViewerXY(clientX, clientY){
-          updateViewerRect();
-          const r = window.rnDraw.viewerRect;
-          return { x: clientX - r.left, y: clientY - r.top };
-        }
-
-        function addPreviewPoint(x,y){
-          window.rnDraw.points.push({x,y});
-          redraw();
-        }
-
-        function undoLastPoint(){
-          if (window.rnDraw.completed) return;
-          window.rnDraw.points.pop();
-          redraw();
-        }
-
-        function completePolygon(){
-          const pts = window.rnDraw.points;
-          if (pts.length < 3) return;
-          window.rnDraw.completed = true;
-
-          const id = 'poly_' + ((window.rnPolygonCounter||0)+1);
-          window.rnPolygonCounter = (window.rnPolygonCounter||0)+1;
-          const shape = { id, color: '#00FF00', points: pts.slice() };
-          window.rnDraw.shapes.push(shape);
-          window.rnDraw.selectedId = id;
-
-          log('=== COMPLETE POLYGON START ===');
-          log('id=' + id + ', points=' + pts.length);
-          createKrpanoPolygon(id, shape.points);
-
-          // chuyển sang idle để pano quay tự do ngay
-          window.rnDraw.mode = 'idle';
-          window.rnDraw.active = false;
-          window.rnDraw.points = [];
-          
-          // Tắt pointerEvents để cho phép quay pano nhưng vẫn hiển thị overlay
-          window.rnDraw.overlay.style.pointerEvents = 'none';
-          window.rnDraw.canvas.style.pointerEvents = 'none';
-          try { if (window.krpano) { window.krpano.call('set(layer[rn_draw_capture].enabled, false);'); } } catch(e){}
-
-          redraw();
-          log('=== COMPLETE POLYGON END ===');
-        }
-
-        function redraw(){
-          const { ctx, canvas, points, completed, shapes, selectedId, mode } = window.rnDraw;
-          ctx.clearRect(0,0,canvas.width,canvas.height);
-
-          // Luôn hiển thị các shape đã vẽ như overlay (preview theo 3D) kể cả khi idle
-          if (shapes.length > 0) {
-            drawShapesAs3D(ctx, shapes, selectedId);
-          }
-
-          // Vẽ preview nếu đang vẽ
-          if (!completed && points.length){
-            drawPolyline(ctx, points, '#FF0000');
-            points.forEach(p => drawPoint(ctx, p.x, p.y, '#FF0000'));
-          }
-        }
-
-        function drawShapesAs3D(ctx, shapes, selectedId) {
-          shapes.forEach(shape => {
-            const isSelected = shape.id === selectedId;
-            
-            let screenPoints = shape.points; // fallback
-            
-            if (shape.spherePoints && typeof krpano !== 'undefined') {
-              try {
-                // Chuyển đổi tọa độ 3D sang 2D hiện tại
-                const view = krpano.get('view');
-                if (view) {
-                  const hlookat = parseFloat(view.hlookat) || 0;
-                  const vlookat = parseFloat(view.vlookat) || 0;
-                  const fov = parseFloat(view.fov) || 90;
-                  
-                  const screenWidth = window.innerWidth;
-                  const screenHeight = window.innerHeight;
-                  const centerX = screenWidth / 2;
-                  const centerY = screenHeight / 2;
-                  
-                  screenPoints = shape.spherePoints.map(spherePoint => {
-                    // Tính toán offset tương đối từ center
-                    const athOffset = spherePoint.ath - hlookat;
-                    const atvOffset = spherePoint.atv - vlookat;
-                    
-                    // Chuyển đổi sang tọa độ màn hình
-                    const screenX = centerX + (athOffset / (fov * 0.5)) * centerX;
-                    const screenY = centerY + (atvOffset / (fov * 0.5)) * centerY;
-                    
-                    return { x: screenX, y: screenY };
-                  });
-                  
-                  const validPoints = screenPoints.filter(p => p && isFinite(p.x) && isFinite(p.y));
-                  if (validPoints.length >= 3) {
-                    screenPoints = validPoints;
-                  } else {
-                    screenPoints = shape.points; // fallback to original screen points
-                  }
-                }
-              } catch(e) {
-                log('drawShapesAs3D error: ' + e.message);
-                screenPoints = shape.points; // fallback
-              }
-            }
-            
-            drawPolygon3D(ctx, screenPoints, shape.color, isSelected);
-          });
-        }
-
-        function drawPolygon3D(ctx, pts, color, highlighted) {
-          if (pts.length < 3) return;
-          
-          // Vẽ với hiệu ứng 3D
-          ctx.strokeStyle = color;
-          ctx.lineWidth = 3;
-          ctx.lineCap = 'round';
-          
-          // Vẽ outline
-          ctx.beginPath();
-          ctx.moveTo(pts[0].x, pts[0].y);
-          for (let i = 1; i < pts.length; i++) {
-            ctx.lineTo(pts[i].x, pts[i].y);
-          }
-          ctx.closePath();
-          ctx.stroke();
-          
-          // Vẽ fill với alpha thấp để thấy 3D
-          ctx.fillStyle = color === '#00FF00' ? 'rgba(0,255,0,0.3)' : 'rgba(255,0,0,0.3)';
-          ctx.fill();
-          
-          // Highlight nếu được chọn
-          if (highlighted) {
-            ctx.strokeStyle = 'rgba(255,255,255,0.8)';
-            ctx.setLineDash([5,5]);
-            ctx.lineWidth = 2;
-            ctx.stroke();
-            ctx.setLineDash([]);
-          }
-        }
-
-        function drawPoint(ctx, x, y, color){
-          ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x,y,7,0,Math.PI*2); ctx.fill();
-          ctx.strokeStyle = '#FFFFFF'; ctx.lineWidth = 2; ctx.stroke();
-        }
-
-        function drawPolyline(ctx, pts, color){
-          if (pts.length < 2) { if (pts[0]) drawPoint(ctx, pts[0].x, pts[0].y, color); return; }
-          ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.lineCap = 'round';
-          ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
-          for (let i=1;i<pts.length;i++){ ctx.lineTo(pts[i].x, pts[i].y); }
-          ctx.stroke();
-        }
-
-        function drawPolygon(ctx, pts, color, highlighted){
-          if (pts.length < 3) return;
-          drawPolyline(ctx, pts, color);
-          // close
-          ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.moveTo(pts[pts.length-1].x, pts[pts.length-1].y); ctx.lineTo(pts[0].x, pts[0].y); ctx.stroke();
-          // fill
-          ctx.fillStyle = color === '#00FF00' ? 'rgba(0,255,0,0.25)' : 'rgba(255,0,0,0.25)';
-          ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y); for(let i=1;i<pts.length;i++){ ctx.lineTo(pts[i].x, pts[i].y);} ctx.closePath(); ctx.fill();
-          // highlight khung
-          if (highlighted){
-            ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.setLineDash([6,6]); ctx.lineWidth = 1;
-            const bb = bbox(pts); ctx.strokeRect(bb.x, bb.y, bb.w, bb.h); ctx.setLineDash([]);
-          }
-        }
-
-        function bbox(pts){
-          let x1=Infinity,y1=Infinity,x2=-Infinity,y2=-Infinity; for(const p of pts){ x1=Math.min(x1,p.x); y1=Math.min(y1,p.y); x2=Math.max(x2,p.x); y2=Math.max(y2,p.y);} return {x:x1,y:y1,w:x2-x1,h:y2-y1};
-        }
-
-        function hitTestShapes(x,y){
-          // Ưu tiên chọn shape chứa điểm (ray casting)
-          for (let i=window.rnDraw.shapes.length-1; i>=0; i--){
-            const s = window.rnDraw.shapes[i];
-            if (pointInPolygon({x,y}, s.points)) return s.id;
-          }
-          return null;
-        }
-
-        function pointInPolygon(pt, pts){
-          let inside = false; for (let i=0,j=pts.length-1; i<pts.length; j=i++){
-            const xi=pts[i].x, yi=pts[i].y, xj=pts[j].x, yj=pts[j].y;
-            const intersect = ((yi>pt.y)!=(yj>pt.y)) && (pt.x < (xj-xi)*(pt.y-yi)/(yj-yi)+xi);
-            if (intersect) inside = !inside;
-          } return inside;
-        }
-
-        function getSelectedShape(){
-          const id = window.rnDraw.selectedId; if (!id) return null;
-          return window.rnDraw.shapes.find(s=>s.id===id) || null;
-        }
-
-        // === Krpano integration ===
-        function resolveKrpano(){
-          // Tìm instance Krpano
-          if (typeof krpano !== 'undefined' && krpano.get && krpano.call) {
-            log('resolveKrpano: found global krpano');
-            return krpano;
-          }
-          
-          // Tìm trong DOM
-          const selectors = ['#krpanoSWFObject', '#krpano', '#pano', 'object', 'embed'];
-          const nodes = Array.from(document.querySelectorAll(selectors.join(',')));
-          for (const node of nodes){
-            const inst = node;
-            if (inst && typeof inst.get === 'function' && typeof inst.call === 'function'){
-              log('resolveKrpano: found DOM node id=' + (inst.id||'(no-id)'));
-              return inst;
-            }
-          }
-          return null;
-        }
-
-        function waitForKrpano(cb){
-          let attempts = 0;
-          const tryIt = ()=>{
-            attempts++;
-            const inst = resolveKrpano();
-            if (inst){
-              window.krpano = inst;
-              log('waitForKrpano: ready after ' + attempts + ' attempts');
-              cb();
-            } else {
-              if (attempts % 10 === 0){ log('waitForKrpano: still waiting (' + attempts + ')'); }
-              setTimeout(tryIt, 100);
-            }
-          };
-          tryIt();
-        }
-
-        function safeCall(cmd){ 
-          try{ 
-            krpano.call(cmd); 
-            log('safeCall: ' + cmd);
-          } catch(e){ 
-            log('safeCall ERROR: ' + e.message + ' cmd:' + cmd); 
-          } 
-        }
-
-        function sphereFromScreen(x, y){
-          log('sphereFromScreen: trying x=' + x + ', y=' + y);
-          
-          try {
-            // Lấy thông tin view hiện tại
-            const view = krpano.get('view');
-            if (!view) {
-              log('sphereFromScreen: cannot get view info');
-              return null;
-            }
-            
-            log('sphereFromScreen: current view - hlookat=' + view.hlookat + ', vlookat=' + view.vlookat + ', fov=' + view.fov);
-            
-            // Lấy kích thước màn hình thực tế
-            const screenWidth = window.innerWidth;
-            const screenHeight = window.innerHeight;
-            
-            // Tính toán tọa độ tương đối từ center (-1 đến +1)
-            const centerX = screenWidth / 2;
-            const centerY = screenHeight / 2;
-            
-            // Chuyển đổi tọa độ overlay sang tọa độ màn hình
-            const overlayRect = window.rnDraw.canvas.getBoundingClientRect();
-            const screenX = x + overlayRect.left;
-            const screenY = y + overlayRect.top;
-            
-            // Tính offset tương đối từ center
-            const offsetX = (screenX - centerX) / centerX; // -1 đến +1
-            const offsetY = (screenY - centerY) / centerY; // -1 đến +1
-            
-            log('sphereFromScreen: screen coords - x=' + screenX + ', y=' + screenY + ', center=' + centerX + ',' + centerY);
-            log('sphereFromScreen: relative offsets - x=' + offsetX + ', y=' + offsetY);
-            
-            // Lấy góc nhìn hiện tại
-            const hlookat = parseFloat(view.hlookat) || 0;
-            const vlookat = parseFloat(view.vlookat) || 0;
-            const fov = parseFloat(view.fov) || 90;
-            
-            // Tính toán ath/atv dựa trên FOV và offset
-            // Sử dụng FOV để tính toán góc tương đối
-            const fovRad = (fov * Math.PI) / 180;
-            
-            // ath: horizontal angle (longitude)
-            // Sử dụng FOV theo chiều ngang
-            const ath = hlookat + (offsetX * fov * 0.5);
-            
-            // atv: vertical angle (latitude)
-            // Sử dụng FOV theo chiều dọc, nhưng cần tính toán chính xác hơn
-            const atv = vlookat + (offsetY * fov * 0.5);
-            
-            // Normalize ath về khoảng -180 đến +180
-            const normalizedAth = ((ath + 180) % 360) - 180;
-            
-            // Clamp atv về khoảng hợp lệ (-90 đến +90)
-            const clampedAtv = Math.max(-90, Math.min(90, atv));
-            
-            log('sphereFromScreen: calculated - ath=' + ath + ', atv=' + atv);
-            log('sphereFromScreen: normalized - ath=' + normalizedAth + ', atv=' + clampedAtv);
-            
-            return { ath: normalizedAth, atv: clampedAtv };
-            
-          } catch(e) {
-            log('sphereFromScreen: ERROR ' + e.message);
-            return null;
-          }
-        }
-        
-        function createKrpanoPolygon(id, pts){
-          log('=== CREATE POLYGON START ===');
-          log('id=' + id + ', points=' + pts.length);
-          
-          waitForKrpano(()=>{
-            const name = id;
-            
-            // Tạo hotspot polygon
-            safeCall('addhotspot(' + name + ');');
-            safeCall('set(hotspot[' + name + '].type, polygon);');
-            safeCall('set(hotspot[' + name + '].renderer, webgl);');
-            safeCall('set(hotspot[' + name + '].fillcolor, 0x00FF00);');
-            safeCall('set(hotspot[' + name + '].fillalpha, 0.5);');
-            safeCall('set(hotspot[' + name + '].bordercolor, 0x00FF00);');
-            safeCall('set(hotspot[' + name + '].borderalpha, 1.0);');
-            safeCall('set(hotspot[' + name + '].borderwidth, 2.0);');
-            safeCall('set(hotspot[' + name + '].fill, true);');
-            safeCall('set(hotspot[' + name + '].zorder, 1000);');
-            safeCall('set(hotspot[' + name + '].visible, true);');
-            safeCall('set(hotspot[' + name + '].enabled, false);');
-            safeCall('set(hotspot[' + name + '].capture, false);');
-            safeCall('hotspot[' + name + '].clearpoints();');
-            
-            const spherePoints = [];
-            
-            // Chuyển đổi từng điểm sang tọa độ sphere
-            pts.forEach((p, idx) => {
-              log('Processing point ' + idx + ': screen(' + p.x + ',' + p.y + ')');
-              
-              const sp = sphereFromScreen(p.x, p.y);
-              if (sp && isFinite(sp.ath) && isFinite(sp.atv)) {
-                log('Point ' + idx + ': sphere(' + sp.ath + ',' + sp.atv + ')');
-                safeCall('hotspot[' + name + '].addpoint(' + sp.ath + ',' + sp.atv + ');');
-                spherePoints.push({ ath: sp.ath, atv: sp.atv });
-              } else {
-                log('Point ' + idx + ': ERROR - invalid coordinates');
-              }
-            });
-            
-            // Lưu lại tọa độ sphere cho shape
-            const shape = window.rnDraw.shapes.find(s => s.id === id);
-            if (shape) { 
-              shape.spherePoints = spherePoints;
-            }
-            
-            log('=== CREATE POLYGON END ===');
-          });
-        }
-        
-        // helper debug: ẩn/hiện overlay
-        window.debugToggleOverlay = function(show){
-          if (!window.rnDraw || !window.rnDraw.overlay) return;
-          window.rnDraw.overlay.style.display = show ? 'block' : 'none';
-        };
-        
-        // helper debug: hiển thị thông tin tọa độ của shape
-        window.debugShapeCoordinates = function(shapeId){
-          if (!window.rnDraw || !window.rnDraw.shapes) return;
-          const shape = window.rnDraw.shapes.find(s => s.id === shapeId);
-          if (shape && shape.spherePoints) {
-            console.log('=== DEBUG SHAPE COORDINATES ===');
-            console.log('Shape ID:', shapeId);
-            console.log('Screen Points:', shape.points);
-            console.log('Sphere Points:', shape.spherePoints);
-            
-            // Hiển thị thông tin view hiện tại
-            if (typeof krpano !== 'undefined') {
-              try {
-                const view = krpano.get('view');
-                console.log('Current View:', {
-                  hlookat: view.hlookat,
-                  vlookat: view.vlookat,
-                  fov: view.fov
-                });
-              } catch(e) {
-                console.log('Cannot get view info:', e.message);
-              }
-            }
-            console.log('=== END DEBUG ===');
-          } else {
-            console.log('Shape not found or no sphere points available');
-          }
-        };
-        
-        // helper debug: tạo polygon test với tọa độ cố định
-        window.createTestPolygon = function(){
-          log('=== CREATE TEST POLYGON START ===');
-          waitForKrpano(()=>{
-            const name = 'test_poly_' + Date.now();
-            safeCall('addhotspot(' + name + ');');
-            safeCall('set(hotspot[' + name + '].type, polygon);');
-            safeCall('set(hotspot[' + name + '].fillcolor, 0xFF0000);');
-            safeCall('set(hotspot[' + name + '].fillalpha, 0.5);');
-            safeCall('set(hotspot[' + name + '].bordercolor, 0xFF0000);');
-            safeCall('set(hotspot[' + name + '].borderalpha, 1.0);');
-            safeCall('set(hotspot[' + name + '].borderwidth, 2.0);');
-            safeCall('set(hotspot[' + name + '].visible, true);');
-            safeCall('set(hotspot[' + name + '].enabled, false);');
-            safeCall('set(hotspot[' + name + '].capture, false);');
-            safeCall('hotspot[' + name + '].clearpoints();');
-            
-            // Lấy góc nhìn hiện tại
-            const view = krpano.get('view');
-            const hlookat = parseFloat(view.hlookat) || 0;
-            const vlookat = parseFloat(view.vlookat) || 0;
-            const fov = parseFloat(view.fov) || 90;
-            
-            // Tạo một hình vuông nhỏ ở center
-            const offset = 5; // offset 5 độ
-            
-            // Thêm 4 điểm để tạo hình vuông
-            safeCall('hotspot[' + name + '].addpoint(' + (hlookat - offset) + ',' + (vlookat - offset) + ');');
-            safeCall('hotspot[' + name + '].addpoint(' + (hlookat + offset) + ',' + (vlookat - offset) + ');');
-            safeCall('hotspot[' + name + '].addpoint(' + (hlookat + offset) + ',' + (vlookat + offset) + ');');
-            safeCall('hotspot[' + name + '].addpoint(' + (hlookat - offset) + ',' + (vlookat + offset) + ');');
-            
-            log('Created test polygon at center: hlookat=' + hlookat + ', vlookat=' + vlookat + ', offset=' + offset);
-            log('=== CREATE TEST POLYGON END ===');
-          });
-        };
-        
-        // helper debug: tạo lại polygon từ shape đã có
-        window.recreatePolygonFromShape = function(shapeId){
-          if (!window.rnDraw || !window.rnDraw.shapes) return;
-          const shape = window.rnDraw.shapes.find(s => s.id === shapeId);
-          if (!shape) {
-            console.log('Shape not found:', shapeId);
-            return;
-          }
-          
-          log('=== RECREATE POLYGON FROM SHAPE START ===');
-          log('Shape ID:', shapeId);
-          log('Screen Points:', shape.points.length);
-          log('Sphere Points:', shape.spherePoints ? shape.spherePoints.length : 0);
-          
-          waitForKrpano(()=>{
-            // Xóa hotspot cũ nếu có
-            try {
-              safeCall('removehotspot(' + shapeId + ');');
-            } catch(e) {
-              log('Cannot remove old hotspot: ' + e.message);
-            }
-            
-            // Tạo lại polygon
-            if (shape.spherePoints && shape.spherePoints.length >= 3) {
-              // Sử dụng tọa độ sphere đã có
-              log('Recreating from sphere points');
-              createKrpanoPolygon(shapeId, shape.points);
-            } else {
-              // Tính toán lại từ screen points
-              log('Recalculating from screen points');
-              createKrpanoPolygon(shapeId, shape.points);
-            }
-            
-            log('=== RECREATE POLYGON FROM SHAPE END ===');
-          });
-        };
-        
-        // helper test: tạo hotspot đơn giản để test theo Krpano API
-        window.testHotspot = function(){
-          log('=== TEST HOTSPOT START ===');
-          safeCall('addhotspot(test_spot);');
-          safeCall('set(hotspot[test_spot].type, spot);');
-          safeCall('set(hotspot[test_spot].ath, 0);');
-          safeCall('set(hotspot[test_spot].atv, 0);');
-          safeCall('set(hotspot[test_spot].visible, true);');
-          safeCall('set(hotspot[test_spot].enabled, true);');
-          log('=== TEST HOTSPOT END ===');
-        };
-        
-        // helper test: tạo polygon đơn giản theo Krpano API
-        window.testPolygon = function(){
-          log('=== TEST POLYGON START ===');
-          safeCall('addhotspot(test_poly);');
-          safeCall('set(hotspot[test_poly].type, polygon);');
-          safeCall('set(hotspot[test_poly].fillcolor, 0xFF0000);');
-          safeCall('set(hotspot[test_poly].fillalpha, 0.5);');
-          safeCall('set(hotspot[test_poly].bordercolor, 0xFF0000);');
-          safeCall('set(hotspot[test_poly].borderalpha, 1.0);');
-          safeCall('set(hotspot[test_poly].borderwidth, 2.0);');
-          safeCall('set(hotspot[test_poly].visible, true);');
-          safeCall('set(hotspot[test_poly].enabled, false);');
-          safeCall('hotspot[test_poly].clearpoints();');
-          safeCall('hotspot[test_poly].addpoint(-10, 10);');
-          safeCall('hotspot[test_poly].addpoint(10, 10);');
-          safeCall('hotspot[test_poly].addpoint(10, -10);');
-          safeCall('hotspot[test_poly].addpoint(-10, -10);');
-          log('=== TEST POLYGON END ===');
-        };
-        
-        function updateKrpanoPolygon(id, pts){
-          log('=== UPDATE POLYGON START ===');
-          log('id=' + id + ', points=' + pts.length);
-          
-          waitForKrpano(()=>{
-            const name = id;
-            safeCall('hotspot[' + name + '].clearpoints();');
-            
-            const spherePoints = [];
-            pts.forEach((p, idx) => {
-              log('Update point ' + idx + ': screen(' + p.x + ',' + p.y + ')');
-              
-              const sp = sphereFromScreen(p.x, p.y);
-              if (sp && isFinite(sp.ath) && isFinite(sp.atv)) {
-                log('Update point ' + idx + ': sphere(' + sp.ath + ',' + sp.atv + ')');
-                safeCall('hotspot[' + name + '].addpoint(' + sp.ath + ',' + sp.atv + ');');
-                spherePoints.push({ ath: sp.ath, atv: sp.atv });
-              } else {
-                log('Update point ' + idx + ': ERROR - invalid coordinates');
-              }
-            });
-            
-            const shape = window.rnDraw.shapes.find(s => s.id === id);
-            if (shape) { shape.spherePoints = spherePoints; }
-            log('=== UPDATE POLYGON END ===');
-          });
-        }
-        
-        function clearAll(){
-          const d = window.rnDraw; if (!d) return;
-          d.points = []; d.active = false; d.completed = true; // kết thúc phiên vẽ
-          d.overlay && d.overlay.parentNode && d.overlay.parentNode.removeChild(d.overlay);
-          log('overlay removed (shapes persisted in krpano)');
-        }
-
-        // Thiết lập lắng nghe thay đổi góc nhìn để redraw overlay khi đang edit
-        waitForKrpano(() => {
-          try {
-            window.rnDraw.onViewChange = function(){
-              redraw();
-            };
-            safeCall('set(events.keep, true);');
-            safeCall('set(events.onviewchange, js(window.rnDraw && window.rnDraw.onViewChange && window.rnDraw.onViewChange()));');
-            // Revert: không tạo layer capture; chỉ dùng overlay
-            window.rnDraw.useKrpanoCapture = false;
-            updatePointerEvents();
-          } catch (e) { log('hook onviewchange error: ' + e.message); }
-        });
-      })();
-    `;
-
-    webViewRef.current?.injectJavaScript(script + '\ntrue;');
+  const handleUndoLastPoint = () => {
+    undoLastPointUtil(webViewRef);
   };
 
-  const clearDrawing = () => {
-    const script = `
-      if (window.clearDrawing) {
-        window.clearDrawing();
-      }
-    `;
-    webViewRef.current?.injectJavaScript(script);
+  const injectJavaScript = () => {
+    injectDrawingScript(webViewRef);
   };
 
   const onMessage = (event: any) => {
     const data = event.nativeEvent.data;
     console.log('Message from WebView:', data);
+  };
+
+  const clearDrawing = () => {
+    clearDrawingUtil(webViewRef);
   };
 
   return (
@@ -890,8 +157,17 @@ const KrpanoScreen: React.FC = () => {
         onMessage={onMessage}
         onLoadEnd={() => {
           console.log('WebView loaded');
+          // Inject drawing script khi WebView đã load xong
+          injectDrawingScript(webViewRef);
         }}
+        // Thêm các thuộc tính để đảm bảo WebView xử lý sự kiện đúng cách
+        allowFileAccess={true}
+        allowFileAccessFromFileURLs={true}
+        allowUniversalAccessFromFileURLs={true}
+        originWhitelist={['*']}
+        mixedContentMode="always"
       />
+      
       
       <TouchableOpacity
         style={styles.backButton}
@@ -906,7 +182,7 @@ const KrpanoScreen: React.FC = () => {
           styles.drawingButton,
           isDrawingMode && styles.drawingButtonActive
         ]}
-        onPress={toggleDrawingMode}
+        onPress={() => handleToggleDrawingMode()}
         activeOpacity={0.7}
       >
         <Text style={[styles.iconText, isDrawingMode && styles.iconTextActive]}>
@@ -914,36 +190,80 @@ const KrpanoScreen: React.FC = () => {
         </Text>
       </TouchableOpacity>
 
-      {isDrawingMode && (
-        <TouchableOpacity
-          style={styles.undoButton}
-          onPress={undoLastPoint}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.iconText}>↻</Text>
-        </TouchableOpacity>
+      <TouchableOpacity
+        style={[
+          styles.freehandButton,
+          isFreehandMode && styles.freehandButtonActive
+        ]}
+        onPress={handleToggleFreehandMode}
+        activeOpacity={0.7}
+      >
+        <Text style={[styles.iconText, isFreehandMode && styles.iconTextActive]}>
+          {isFreehandMode ? '✓' : '✎'}
+        </Text>
+      </TouchableOpacity>
+
+      {(isDrawingMode || isFreehandMode) && (
+        <>
+          <TouchableOpacity
+            style={styles.undoButton}
+            onPress={handleUndoLastPoint}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.iconText}>↩️</Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity
+            style={styles.clearButton}
+            onPress={clearDrawing}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.iconText}>🗑️</Text>
+          </TouchableOpacity>
+        </>
       )}
 
-      {!isDrawingMode && (
-        <TouchableOpacity
-          style={[
-            styles.editButton,
-            isEditMode && styles.editButtonActive
-          ]}
-          onPress={() => toggleEditMode()}
-          activeOpacity={0.7}
-        >
-          <Text style={[styles.iconText, isEditMode && styles.iconTextActive]}>
-            {isEditMode ? '✓' : '✏️'}
-          </Text>
-        </TouchableOpacity>
+      {!isDrawingMode && !isFreehandMode && (
+        <>
+          <TouchableOpacity
+            style={[
+              styles.editButton,
+              isEditMode && styles.editButtonActive
+            ]}
+            onPress={() => handleToggleEditMode()}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.iconText, isEditMode && styles.iconTextActive]}>
+              {isEditMode ? '✓' : '✏️'}
+            </Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity
+            style={[
+              styles.moveButton,
+              isMoveMode && styles.moveButtonActive
+            ]}
+            onPress={() => handleToggleMoveMode()}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.iconText, isMoveMode && styles.iconTextActive]}>
+              {isMoveMode ? '✓' : '↔️'}
+            </Text>
+          </TouchableOpacity>
+        </>
       )}
 
       {showInstructions && (
         <View style={styles.instructionsContainer}>
           <Text style={styles.instructionsText}>
-            Chạm vào màn hình để thêm điểm{'\n'}
-            Chạm vào điểm đầu tiên để hoàn thành
+            {isFreehandMode ? 
+              "Chạm và kéo để vẽ tự do\nThả ra để hoàn thành" : 
+              isDrawingMode ? 
+                "Chạm vào màn hình để thêm điểm\nChạm vào điểm đầu tiên để hoàn thành" :
+                isMoveMode ? 
+                  "Chạm vào hình vẽ để di chuyển\nKéo để di chuyển trong không gian 3D" :
+                  "Chạm vào hình vẽ để chỉnh sửa\nKéo để thay đổi hình dạng"
+            }
           </Text>
         </View>
       )}
@@ -1000,11 +320,54 @@ const styles = StyleSheet.create({
     elevation: 5,
   },
   drawingButtonActive: {
+    backgroundColor: 'rgba(0, 255, 0, 0.8)',
+  },
+  freehandButton: {
+    position: 'absolute',
+    top: 110,
+    right: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(128, 128, 128, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  freehandButtonActive: {
     backgroundColor: 'rgba(255, 0, 0, 0.8)',
   },
   undoButton: {
     position: 'absolute',
-    top: 110,
+    top: 170,
+    right: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(128, 128, 128, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  clearButton: {
+    position: 'absolute',
+    top: 230,
     right: 20,
     width: 44,
     height: 44,
@@ -1069,6 +432,29 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 22,
   },
+  moveButton: {
+    position: 'absolute',
+    top: 170,
+    left: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(128, 128, 128, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  moveButtonActive: {
+    backgroundColor: 'rgba(0, 0, 255, 0.8)',
+  },
 });
 
-export default KrpanoScreen; 
+export default KrpanoScreen;
